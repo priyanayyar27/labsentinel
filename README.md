@@ -2,11 +2,11 @@
 
 <div align="center">
 
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=28&pause=1200&color=76B900&center=true&vCenter=true&width=1000&lines=Catches+data+integrity+issues+that+human+auditors+miss.;AI-powered+pharmaceutical+compliance+auditor.;Built+entirely+on+NVIDIA+Nemotron.)](https://github.com/priyanayyar27/labsentinel)
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=28&pause=1000&color=76B900&center=true&vCenter=true&width=700&lines=Catches+data+integrity+issues+that+human+auditors+miss.;AI-powered+pharmaceutical+compliance+auditor.;Built+entirely+on+NVIDIA+Nemotron.)](https://github.com/priyanayyar27/labsentinel)
 
 </div>
 
-**Flawed lab results go undetected every day, keeping doomed drugs alive for years — wasting billions and eventually putting patients at risk. LabSentinel uses NVIDIA AI to automatically catch these errors before they snowball.**
+**An AI-powered pharmaceutical data integrity auditor that cross-references lab imagery against Standard Operating Procedures — built entirely on the NVIDIA AI stack.**
 
 [![NVIDIA Nemotron](https://img.shields.io/badge/NVIDIA-Nemotron-76b900?style=for-the-badge&logo=nvidia&logoColor=white)](https://build.nvidia.com)
 [![NVIDIA NIM](https://img.shields.io/badge/NVIDIA-NIM_API-76b900?style=for-the-badge&logo=nvidia&logoColor=white)](https://build.nvidia.com)
@@ -20,19 +20,18 @@
 
 ## 💊 The Problem
 
-Pharmaceutical data integrity failures are a **$28 billion/year crisis** — and it's getting worse.
+Flawed lab results go undetected every day, keeping doomed drugs alive for years — wasting billions and eventually putting patients at risk. LabSentinel uses NVIDIA AI to automatically catch these errors before they snowball.
 
 | Statistic | Source |
 |-----------|--------|
-| **$28B/year** wasted on irreproducible preclinical research in the US alone | [Freedman et al., PLOS Biology](https://journals.plos.org/plosbiology/article?id=10.1371/journal.pbio.1002165) |
-| **50%+** of preclinical studies cannot be replicated | [Nature, 2012](https://www.nature.com/articles/483531a) |
-| **+50% jump** in FDA warning letters in 2025 — data integrity is the #1 cited issue | FDA Inspection Database |
-| **$800M–$1.4B** cost of a single failed Phase 3 clinical trial | [DiMasi et al.](https://doi.org/10.1016/j.jhealeco.2016.01.012) |
-| Amgen replicated 53 landmark cancer studies — **only 11% succeeded** | [Begley & Ellis, Nature](https://www.nature.com/articles/483531a) |
+| **190 warning letters** issued to drug manufacturers in FY2024 alone — each costing ~$50M in remediation | [Mareana, 2025](https://mareana.com/blog/the-pharmaceutical-data-integrity-crisis-that-still-cant-find-last-tuesdays-batch/) |
+| **CDER warning letters up 50%** in FY2025 — the sharpest spike in a decade | [FDA Group / RAPS, Dec 2025](https://insider.thefdagroup.com/p/cder-warning-letters-jump-50-percent) |
+| **73% more warning letters** issued Jul–Dec 2025 vs same period 2024 | [Reed Smith, Dec 2025](https://www.reedsmith.com/articles/fda-inspections-in-2025-heightened-rigor-data-driven-targeting-and-increased-surveillance/) |
+| **Data integrity is the #1 cited issue** — mentioned in 61% of all FDA warning letters in recent years | [European Pharmaceutical Review, 2024](https://www.europeanpharmaceuticalreview.com/news/219951/fda-warning-letters-highlight-data-integrity-issues/) |
+| **15–20% of manufacturing efficiency** lost due to poor data integration at mid-size pharma companies | [Mareana Industry Analysis, 2025](https://mareana.com/blog/the-pharmaceutical-data-integrity-crisis-that-still-cant-find-last-tuesdays-batch/) |
+| **$5.1M average cost** per pharmaceutical data breach incident | [IBM Cost of Data Breach Report, 2024](https://ninjio.com/2025/07/pharmaceutical-data-breach-costs-5-million-analysis/) |
 
-**The root cause?** Human auditors suffer from confirmation bias, time pressure, and fatigue. They review lab results expecting them to be correct — and miss subtle discrepancies between what the lab actually produced and what the protocol required.
-
-**LabSentinel replaces manual spot-checks with AI-powered systematic auditing.**
+**The root cause?** Every other industry has automated quality checks — manufacturing has sensors, finance has fraud detection, software has automated testing. Pharma R&D still relies on a human glancing at a printout and signing off. There is no automated checkpoint between the lab bench and the clinical pipeline. LabSentinel is that missing checkpoint.
 
 ---
 
