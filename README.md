@@ -6,7 +6,7 @@
 
 </div>
 
-**An AI-powered pharmaceutical data integrity auditor that cross-references lab imagery against Standard Operating Procedures — built entirely on the NVIDIA AI stack.**
+**Flawed lab results go undetected every day, keeping doomed drugs alive for years — wasting billions and eventually putting patients at risk. LabSentinel uses NVIDIA AI to automatically catch these errors before they snowball.**
 
 [![NVIDIA Nemotron](https://img.shields.io/badge/NVIDIA-Nemotron-76b900?style=for-the-badge&logo=nvidia&logoColor=white)](https://build.nvidia.com)
 [![NVIDIA NIM](https://img.shields.io/badge/NVIDIA-NIM_API-76b900?style=for-the-badge&logo=nvidia&logoColor=white)](https://build.nvidia.com)
