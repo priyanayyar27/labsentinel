@@ -10,9 +10,19 @@ import os
 import json
 import re
 import hashlib
+from io import BytesIO
+from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 from sample_sops import SAMPLE_SOPS
+
+# Optional: PIL for EXIF metadata extraction
+try:
+    from PIL import Image
+    from PIL.ExifTags import TAGS
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
 
 # ============================================================
 # SETUP: Load API key and configure NVIDIA API client
@@ -81,6 +91,48 @@ def image_to_base64(uploaded_file):
 
 
 # ============================================================
+# HELPER: Extract EXIF metadata from uploaded image
+# ============================================================
+# Real data integrity audits check image timestamps, camera info,
+# and modification history. This extracts what's available.
+
+def extract_exif_metadata(uploaded_file):
+    """Extract EXIF metadata from an uploaded image file."""
+    metadata = {}
+    if not HAS_PIL:
+        return metadata
+    try:
+        uploaded_file.seek(0)
+        img = Image.open(BytesIO(uploaded_file.read()))
+        uploaded_file.seek(0)  # Reset for later use
+        
+        # Basic image info
+        metadata["image_width"] = img.size[0]
+        metadata["image_height"] = img.size[1]
+        metadata["format"] = img.format or "Unknown"
+        metadata["mode"] = img.mode
+        
+        # EXIF data (if present — camera photos have it, screenshots usually don't)
+        exif_data = img._getexif() if hasattr(img, '_getexif') and img._getexif() else {}
+        
+        for tag_id, value in exif_data.items():
+            tag_name = TAGS.get(tag_id, tag_id)
+            if tag_name in ["DateTime", "DateTimeOriginal", "DateTimeDigitized"]:
+                metadata["capture_date"] = str(value)
+            elif tag_name == "Make":
+                metadata["camera_make"] = str(value)
+            elif tag_name == "Model":
+                metadata["camera_model"] = str(value)
+            elif tag_name == "Software":
+                metadata["software"] = str(value)
+            elif tag_name == "ImageDescription":
+                metadata["description"] = str(value)
+    except Exception:
+        pass
+    return metadata
+
+
+# ============================================================
 # CORE FUNCTION 1: Analyze the lab image using Nemotron Vision
 # ============================================================
 # This sends the lab image to NVIDIA's vision model and asks it
@@ -108,6 +160,10 @@ EXPERIMENT_TYPE: GEL_ELECTROPHORESIS (if you see a gel with bands/lanes under UV
 EXPERIMENT_TYPE: HPLC_CHROMATOGRAPHY (if you see a chromatogram chart with peaks)
 EXPERIMENT_TYPE: COLONY_COUNTING (if you see petri dishes with bacterial colonies)
 EXPERIMENT_TYPE: OTHER (if none of the above)
+
+SECOND, rate the image quality for audit purposes on the next line:
+IMAGE_QUALITY: <1-10> (1=completely unusable, 5=marginal, 10=perfect lab documentation quality)
+Consider: focus/sharpness, lighting, resolution, framing, whether key details are visible.
 
 THEN describe EXACTLY what you observe:
 1. Overall image quality and clarity
@@ -296,10 +352,14 @@ def parse_audit_response(response_text):
         total = compliant + non_compliant + unable
         
         if total > 0:
-            # Compliant items get full marks, unable-to-assess get half marks (benefit of doubt)
-            raw_score = ((compliant * 1.0) + (unable * 0.5)) / total * 100
+            # Compliant items get full marks.
+            # Unable-to-assess gets 25% credit — in pharma, if you can't prove compliance,
+            # you're closer to non-compliant than compliant (FDA burden-of-proof principle).
+            raw_score = ((compliant * 1.0) + (unable * 0.25)) / total * 100
             
-            # Deduct points for findings by severity
+            # Deduct points for findings by severity.
+            # Weights mapped to FDA risk classification: CRITICAL = patient safety risk,
+            # MAJOR = regulatory non-compliance, MINOR = procedural gap, OBSERVATION = cosmetic.
             severity_penalties = {"CRITICAL": 15, "MAJOR": 10, "MINOR": 5, "OBSERVATION": 2}
             penalty = sum(severity_penalties.get(f.get("severity", "").upper(), 0) for f in findings)
             
@@ -670,8 +730,36 @@ if audit_button and uploaded_image is not None and sop_text:
             image_analysis = analyze_lab_image(image_b64, image_type)
             set_cached(cache_key, image_analysis)
     
-    # STEP 1.5: Check if image matches the selected SOP
-    # Uses THREE signals: vision model classification, filename, and description keywords
+    # STEP 1.25: Extract EXIF metadata for forensic audit trail
+    exif_metadata = extract_exif_metadata(uploaded_image)
+    
+    # STEP 1.5a: Image Quality Gate
+    # Extract the IMAGE_QUALITY rating from the vision model's response
+    image_quality_score = None
+    for line in image_analysis.split('\n')[:5]:
+        if "IMAGE_QUALITY:" in line.upper():
+            try:
+                image_quality_score = int(re.search(r'\d+', line.split(":")[-1]).group())
+            except (AttributeError, ValueError):
+                pass
+            break
+    
+    # Block audit if image quality is too low to produce reliable results
+    if image_quality_score is not None and image_quality_score <= 3:
+        st.html("""
+        <div style="padding:2rem; border-radius:16px; text-align:center; margin:1rem 0; background:linear-gradient(135deg, rgba(255,176,32,0.12), rgba(255,176,32,0.03)); border:1px solid rgba(255,176,32,0.4);">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:72px; font-weight:700; color:#ffb020; margin:0;">⚠️ LOW QUALITY IMAGE</div>
+            <div style="font-weight:600; font-size:1.2rem; text-transform:uppercase; letter-spacing:3px; color:#ffb020; margin-top:0.3rem;">Image quality too low for reliable audit</div>
+        </div>
+        """)
+        st.warning(f"**Image quality rated {image_quality_score}/10 by the vision model.** "
+                   "The image is too blurry, dark, or low-resolution for a reliable audit. "
+                   "Please upload a clearer image and try again. "
+                   "A quality score of 4 or higher is required to proceed.")
+        st.stop()
+    
+    # STEP 1.5b: Check if image matches the selected SOP
+    # Uses TWO vision-based signals (filename intentionally excluded — scientists use arbitrary names)
     is_mismatch = False
     
     # Map SOP keywords to expected experiment types
@@ -706,15 +794,7 @@ if audit_button and uploaded_image is not None and sop_text:
             detected_type = line.split(":")[-1].strip().upper()
             break
     
-    # SIGNAL 2: Check the filename for clues
-    filename = uploaded_image.name.lower() if uploaded_image.name else ""
-    filename_type = "OTHER"
-    for exp_type, keywords in type_keywords.items():
-        if any(kw in filename.replace("-", " ").replace("_", " ") for kw in keywords):
-            filename_type = exp_type
-            break
-    
-    # SIGNAL 3: Check the vision description text for strong keywords
+    # SIGNAL 2: Check the vision description text for strong keywords
     description_lower = image_analysis.lower()
     description_type = "OTHER"
     for exp_type, keywords in type_keywords.items():
@@ -723,10 +803,10 @@ if audit_button and uploaded_image is not None and sop_text:
             break
     
     # Combine signals: use the best available classification
-    # Priority: explicit vision classification > filename > description keywords
+    # Priority: explicit vision classification > description keywords
+    # NOTE: Filename is intentionally excluded — scientists use arbitrary naming
+    # conventions, and relying on filenames would create false mismatches
     best_detected_type = detected_type
-    if best_detected_type == "OTHER":
-        best_detected_type = filename_type
     if best_detected_type == "OTHER":
         best_detected_type = description_type
     
@@ -885,6 +965,42 @@ if audit_button and uploaded_image is not None and sop_text:
     
     st.divider()
     
+    # Image Forensics (EXIF metadata + quality score)
+    st.markdown('<div class="section-title">🔎 Image Forensics</div>', unsafe_allow_html=True)
+    
+    forensic_col1, forensic_col2 = st.columns(2)
+    with forensic_col1:
+        quality_label = "Unknown"
+        quality_color = "#8a8a96"
+        if image_quality_score is not None:
+            if image_quality_score >= 7:
+                quality_label = f"{image_quality_score}/10 — Good"
+                quality_color = "#4cdf78"
+            elif image_quality_score >= 4:
+                quality_label = f"{image_quality_score}/10 — Marginal"
+                quality_color = "#ffd44a"
+            else:
+                quality_label = f"{image_quality_score}/10 — Poor"
+                quality_color = "#ff6b7a"
+        st.markdown(f"**Image Quality:** <span style='color:{quality_color}'>{quality_label}</span>", unsafe_allow_html=True)
+        if exif_metadata.get("image_width"):
+            st.markdown(f"**Resolution:** {exif_metadata['image_width']} × {exif_metadata['image_height']} px")
+        if exif_metadata.get("format"):
+            st.markdown(f"**Format:** {exif_metadata['format']} ({exif_metadata.get('mode', 'N/A')})")
+    
+    with forensic_col2:
+        if exif_metadata.get("capture_date"):
+            st.markdown(f"**Capture Date:** {exif_metadata['capture_date']}")
+        else:
+            st.markdown("**Capture Date:** Not available (no EXIF data)")
+        if exif_metadata.get("camera_make") or exif_metadata.get("camera_model"):
+            camera = f"{exif_metadata.get('camera_make', '')} {exif_metadata.get('camera_model', '')}".strip()
+            st.markdown(f"**Camera/Device:** {camera}")
+        if exif_metadata.get("software"):
+            st.markdown(f"**Software:** {exif_metadata['software']}")
+    
+    st.divider()
+    
     # Raw AI Analysis (collapsible - for transparency)
     with st.expander("🔍 View Raw Image Analysis (Nemotron Vision Output)"):
         st.text(image_analysis)
@@ -896,7 +1012,7 @@ if audit_button and uploaded_image is not None and sop_text:
 st.html("""
 <div style="text-align:center; padding:2rem 0 1rem; font-family:'DM Sans',sans-serif;">
     <div style="margin-bottom:12px;">
-        <a href="https://github.com/YOUR-USERNAME/labsentinel" style="background:rgba(118,185,0,0.12); border:1px solid rgba(118,185,0,0.3); color:#76b900; padding:0.6rem 2rem; border-radius:8px; font-weight:700; font-size:1rem; text-decoration:none; display:inline-block;">⭐ View on GitHub</a>
+        <a href="https://github.com/priyanayyar27/labsentinel" style="background:rgba(118,185,0,0.12); border:1px solid rgba(118,185,0,0.3); color:#76b900; padding:0.6rem 2rem; border-radius:8px; font-weight:700; font-size:1rem; text-decoration:none; display:inline-block;">⭐ View on GitHub</a>
     </div>
     <div style="font-size:0.8rem; color:#404050; margin-top:12px;">
         Powered by NVIDIA Nemotron · Built for <span style="color:#76b900;">GTC 2026</span> Golden Ticket Contest

@@ -80,11 +80,11 @@ LabSentinel is an AI auditor that cross-references **physical lab evidence** (im
  └──────────┘                              ┌───────▼──────────┐
                                            │  AUDIT ENGINE    │
                     ┌─────────────────┐    │                  │
-                    │ 3-Signal        │    │  • Parse JSON    │
+                    │ 2-Signal        │    │  • Parse JSON    │
                     │ Mismatch Gate   │───▶│  • Deterministic │
                     │                 │    │    scoring       │
                     │ • Vision class  │    │  • Severity map  │
-                    │ • Filename      │    │  • Compliance    │
+                    │ • Keywords      │    │  • Compliance    │
                     │ • Keywords      │    │    checklist     │
                     └─────────────────┘    └───────┬──────────┘
                                                    │
@@ -131,9 +131,11 @@ LabSentinel solves this with a **deterministic scoring engine** that overrides t
 
 ```python
 # Score is CALCULATED from checklist, not trusted from the AI
-raw_score = ((compliant * 1.0) + (unable * 0.5)) / total * 100
+raw_score = ((compliant * 1.0) + (unable * 0.25)) / total * 100
 
-# Severity-based penalty deductions
+# Severity-based penalty deductions (mapped to FDA risk classification)
+# CRITICAL = patient safety risk, MAJOR = regulatory non-compliance,
+# MINOR = procedural gap, OBSERVATION = cosmetic
 severity_penalties = {"CRITICAL": 15, "MAJOR": 10, "MINOR": 5, "OBSERVATION": 2}
 penalty = sum(penalties for each finding)
 
@@ -142,15 +144,26 @@ final_score = max(0, min(100, round(raw_score - penalty)))
 
 **Same checklist = same score. Every time.** This is critical for audit credibility.
 
-### 3-Signal Mismatch Detection
+> **Design decision:** "Unable to assess" items receive only 25% credit (not 50%). In pharma, if you can't prove compliance, you're closer to non-compliant — aligned with the FDA's burden-of-proof principle.
 
-Before running the expensive reasoning model, LabSentinel validates that the uploaded image actually matches the selected SOP using three independent signals:
+### Image Quality Gate
+
+Before running the audit, LabSentinel asks the vision model to rate the image quality on a 1–10 scale. Images scoring 3 or below are **rejected** — because a blurry or dark image would produce unreliable audit results, and unreliable results are worse than no results in a compliance context.
+
+### Image Forensics (EXIF Metadata)
+
+LabSentinel extracts and displays EXIF metadata from uploaded images — capture date, camera/device, software, and resolution. In real-world data integrity audits, verifying that an image was taken on the right date with the right equipment is a core forensic check. If EXIF data is missing (common with screenshots or edited images), LabSentinel flags this.
+
+### 2-Signal Mismatch Detection
+
+Before running the expensive reasoning model, LabSentinel validates that the uploaded image actually matches the selected SOP using two independent signals from the vision model:
 
 1. **Vision classification** — the vision model's explicit `EXPERIMENT_TYPE` label
-2. **Filename analysis** — keywords in the uploaded file name
-3. **Description keywords** — domain-specific terms in the vision output
+2. **Description keywords** — domain-specific terms in the vision output
 
 If signals indicate a mismatch (e.g., gel image + MTT protocol), the audit is blocked immediately — saving API cost and preventing misleading results.
+
+> **Design decision:** Filename-based detection was deliberately excluded. Scientists name files inconsistently (`IMG_4521.jpg`, `tuesday_results.png`), and relying on filenames would introduce false positives in real-world use.
 
 ### Persistent Disk Cache
 
@@ -158,6 +171,14 @@ All AI responses are cached to disk (`.labsentinel_cache.json`) keyed by image h
 - Same image + same SOP = identical result forever (even after restart)
 - No wasted API calls on repeated audits
 - Results are reproducible — a core requirement for any compliance tool
+
+---
+
+## ⚠️ Known Limitations
+
+1. **AI-generated checklist** — The deterministic scoring engine overrides the AI's *number*, but the AI still decides which checklist items are "COMPLIANT" vs "NON-COMPLIANT." If the AI misclassifies a checklist item, the score will be consistently wrong. **Future fix:** Fine-tuned model on labeled pharmaceutical audit data, or a human-in-the-loop review step before score finalization.
+
+2. **Single-image analysis** — Real SOPs often require multiple images (e.g., before/after treatment, control vs. experiment). LabSentinel currently audits one image at a time and cannot detect if a required control image is missing. **Future fix:** Multi-image batch upload with cross-image comparison using NIM parallel inference.
 
 ---
 
