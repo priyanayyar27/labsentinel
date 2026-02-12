@@ -237,6 +237,8 @@ The ultimate vision: an **autonomous compliance agent** that continuously monito
 | **HPLC Chromatography** | SOP-HP-001 | Peak symmetry, baseline stability, retention times, resolution |
 | **Colony Counting (CFU)** | SOP-BC-001 | Colony morphology, plate contamination, countable range, dilution accuracy |
 
+*These four were selected because they produce visually auditable outputs, span the full drug development pipeline, and are among the most frequently cited in FDA warning letters — more experiment types can be added.*
+
 ---
 
 ## 👩‍💻 About the Builder
