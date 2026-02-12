@@ -1,6 +1,10 @@
 # 🔬 LabSentinel
 
-### Catches data integrity issues that human auditors miss.
+<div align="center">
+
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=28&pause=1000&color=76B900&center=true&vCenter=true&width=700&lines=Catches+data+integrity+issues+that+human+auditors+miss.;AI-powered+pharmaceutical+compliance+auditor.;Built+entirely+on+NVIDIA+Nemotron.)](https://github.com/priyanayyar27/labsentinel)
+
+</div>
 
 **An AI-powered pharmaceutical data integrity auditor that cross-references lab imagery against Standard Operating Procedures — built entirely on the NVIDIA AI stack.**
 
