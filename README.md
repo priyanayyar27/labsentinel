@@ -2,7 +2,7 @@
 
 <div align="center">
 
-[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=28&pause=1000&color=76B900&center=true&vCenter=true&width=1200&lines=AI+that+audits+lab+images+against+SOPs+to+flag+compliance+gaps+in+seconds.;Built+entirely+on+NVIDIA+Nemotron.;The+%231+FDA+violation+is+data+integrity.+This+catches+it.)](https://github.com/priyanayyar27/labsentinel)
+[![Typing SVG](https://readme-typing-svg.herokuapp.com?font=Fira+Code&weight=700&size=28&pause=1000&color=76B900&center=true&vCenter=true&width=1200&lines=Built+entirely+on+NVIDIA+Nemotron.;The+%231+FDA+violation+is+data+integrity.+This+catches+it.)](https://github.com/priyanayyar27/labsentinel)
 
 </div>
 
@@ -15,21 +15,6 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
 > 🏆 **Built for the [NVIDIA GTC 2026 Golden Ticket Developer Contest](https://developer.nvidia.com/gtc-golden-ticket-contest)**
-
----
-
-## 📸 See It In Action
-
-<div align="center">
-
-| Correct Pairing (HPLC image + HPLC SOP) | Wrong Pairing (Well plate + HPLC SOP) |
-|---|---|
-| ![Correct audit](docs/demo_correct_pairing.png) | ![Mismatch detected](docs/demo_mismatch.png) |
-| Score: 29/100 · 1 real finding flagged | Score: ≤15/100 · Mismatch override triggered |
-
-</div>
-
-> *Try it yourself: sample lab images are included in the [`/samples`](samples/) folder — upload any of them and pair with any SOP to see how the scoring and mismatch detection work.*
 
 ---
 
@@ -74,6 +59,8 @@ Meanwhile, FDA enforcement is surging:
 | **Gel Electrophoresis** | SOP-GE-001 | Band sharpness, DNA ladder presence, gel integrity, lane separation |
 | **HPLC Chromatography** | SOP-HP-001 | Peak symmetry, baseline stability, retention times, resolution |
 | **Colony Counting (CFU)** | SOP-BC-001 | Colony morphology, plate contamination, countable range, dilution accuracy |
+
+*These four were selected because they produce visually auditable outputs, span the full drug development pipeline, and are among the most frequently cited in FDA warning letters — more experiment types can be added via custom SOP paste or by extending the SOP library.*
 
 ---
 
@@ -139,78 +126,36 @@ This separation ensures each model operates in its area of strength: visual unde
 
 ## 🧠 How The Scoring Works
 
-AI models are inconsistent with numerical scores — ask the same question twice, get two different numbers. **That's unacceptable for a compliance tool.** LabSentinel solves this with a deterministic scoring engine that overrides the AI's subjective score.
+Pharmaceutical compliance demands reproducible, auditable scores — the same evidence must always produce the same number. LabSentinel achieves this with a **deterministic scoring engine** that calculates scores from structured checklist outputs produced by Nemotron, ensuring consistency across every audit.
 
 ### Step 1: Checklist Score
 
-Every SOP requirement is marked by the AI as one of three statuses:
+Nemotron evaluates every SOP requirement and marks each one as COMPLIANT, NON-COMPLIANT, or UNABLE TO ASSESS. These are weighted to produce a raw checklist score — compliant items get full credit, unable-to-assess items get partial credit, and non-compliant items get zero.
 
-| Status | Points | Meaning |
-|---|---|---|
-| ✅ **COMPLIANT** | 1.0 (full credit) | AI can see evidence the requirement is met |
-| ❓ **UNABLE TO ASSESS** | 0.25 (25% credit) | Information not visible in the image (e.g., temperature, flow rate) |
-| ❌ **NON-COMPLIANT** | 0.0 (zero) | AI can see evidence the requirement is NOT met |
-
-```python
-raw_score = ((compliant × 1.0) + (unable × 0.25)) / total × 100
-```
-
-> **Why 25% for Unable to Assess?** This follows the FDA's burden-of-proof principle: if you can't *prove* compliance, you're closer to non-compliant than compliant. But it's not the same as confirmed non-compliance. These items represent legitimate sensor gaps (temperature, humidity, flow rate) — data that requires physical sensors, not photos. This is exactly what our Phase 2 roadmap addresses with NVIDIA Jetson edge AI.
+> **Why partial credit for Unable to Assess?** This follows the FDA's burden-of-proof principle: if you can't *prove* compliance, you're closer to non-compliant than compliant. But it's not the same as confirmed non-compliance. These items represent legitimate sensor gaps — data that requires physical sensors, not photos. This is exactly what our Phase 2 roadmap addresses with NVIDIA Jetson edge AI.
 
 ### Step 2: Severity Penalties
 
-Each real finding deducts points based on FDA risk classification:
-
-| Severity | Penalty | Risk Level |
-|---|---|---|
-| **CRITICAL** | −15 pts | Patient safety risk, data fabrication |
-| **MAJOR** | −10 pts | Regulatory non-compliance |
-| **MINOR** | −5 pts | Procedural gap |
-| **OBSERVATION** | −2 pts | Best-practice deviation |
-
-```
-final_score = max(0, min(100, raw_score − total_penalties))
-```
+Each real finding deducts points based on FDA risk classification — CRITICAL findings (patient safety risk) carry the heaviest penalty, while OBSERVATIONS (best-practice deviations) carry the lightest.
 
 ### Step 3: Status Assignment
 
-| Score | Status | Meaning |
-|---|---|---|
-| 80–100 | ✅ PASS | Compliant |
-| 50–79 | ⚠️ INVESTIGATE | Review needed |
-| 0–49 | ❌ FAIL | Non-compliant |
+The final score (checklist score minus penalties, clamped 0–100) determines the status: **PASS** (high compliance), **INVESTIGATE** (review needed), or **FAIL** (non-compliant).
 
 **Same checklist = same score. Every time.** This is critical for audit credibility.
 
 ---
 
-## 🛡️ Mismatch Detection & Override (v55)
+## 🛡️ Mismatch Detection & Override
 
-What happens if someone uploads a well plate image but selects the HPLC SOP? Without protection, the AI marks most items as "Unable to Assess" (because HPLC criteria don't apply to well plates), and the 25% partial credit inflates the score to ~43 — misleadingly high for a completely wrong pairing.
+What happens if someone uploads a well plate image but selects the HPLC SOP? LabSentinel catches this automatically using **two independent signals** from the vision model:
 
-### How LabSentinel Catches This
-
-**Two independent signals** from the vision model:
-
-1. **Explicit classification** — the vision model's `EXPERIMENT_TYPE` label
+1. **Explicit classification** — the vision model's experiment type label
 2. **Keyword detection** — domain-specific terms in the description (e.g., "well plate", "chromatogram", "petri dish")
 
-If the detected experiment type doesn't match the SOP's expected type → **mismatch flagged.**
+If the detected experiment type doesn't match the SOP → the score is **overridden in code** to reflect the fundamental pairing error, a CRITICAL finding is injected explaining the mismatch, and the status is forced to FAIL. The audit still runs so the user can see exactly what happened.
 
-### What Happens on Mismatch
-
-This is enforced in **code**, not by the AI prompt (because smaller models don't reliably follow conditional instructions):
-
-- Score **capped at ≤15**, forced to **FAIL**
-- A **CRITICAL finding** is injected explaining the mismatch
-- The audit still runs — so the user can see exactly what happened
-
-### Why This Design Is Fair
-
-| Scenario | Unable to Assess | Mismatch Override | Result |
-|---|---|---|---|
-| ✅ Correct pairing, sensor gaps (HPLC image + HPLC SOP) | Gets 25% credit | Not triggered | Fair score for what CAN be verified |
-| ❌ Wrong pairing (well plate + HPLC SOP) | Would inflate score | Caps at ≤15 | Honest low score |
+This override is enforced at the code level, not by the AI prompt — ensuring wrong pairings are always caught regardless of model behavior. Correctly paired audits where some items are "Unable to Assess" (legitimate sensor gaps) are scored fairly and are not affected by this override.
 
 > **Design decision:** Filename-based detection was deliberately excluded. Scientists name files inconsistently (`IMG_4521.jpg`, `tuesday_results.png`), and relying on filenames would introduce false positives.
 
@@ -306,17 +251,13 @@ The app opens at `http://localhost:8501`.
 
 ```
 labsentinel/
-├── app.py                  # Main application — UI + audit engine + scoring logic (v55)
+├── app.py                  # Main application — UI + audit engine + scoring logic
 ├── sample_sops.py          # 4 realistic pharmaceutical SOPs
 ├── requirements.txt        # Python dependencies
 ├── .env.example            # Template for API key
 ├── .gitignore              # Excludes .env, cache, __pycache__
-├── SCORING_LOGIC.md        # Complete scoring formula & mismatch logic documentation
 ├── README.md               # This file
-├── docs/                   # Screenshots for README
-│   ├── demo_correct_pairing.png
-│   └── demo_mismatch.png
-└── samples/                # Test images for judges to try immediately
+└── samples/                # Sample lab images to try immediately
     ├── hplc_chromatogram.png
     ├── gel_electrophoresis.jpg
     ├── colony_plate.jpg
@@ -337,13 +278,13 @@ Don't have lab images handy? No problem — the [`/samples`](samples/) folder in
 | `mtt_well_plate.jpg` | MTT | Cell Viability Assay ✅ | Correct pairing — assesses well uniformity, color intensity |
 | `mtt_well_plate.jpg` | MTT | HPLC Chromatography Analysis ❌ | **Wrong pairing** — mismatch override triggers, score capped at ≤15 |
 
-> **For judges:** Upload any image with any SOP to test the mismatch detection. The system will catch wrong pairings and explain why.
+> **💡 Tip:** Upload any image with any SOP to test the mismatch detection. The system will catch wrong pairings and explain why.
 
 ---
 
 ## 👩‍💻 About the Builder
 
-Built by **Priyanka Nayyar** — 3 years at **GSK Pharma** · Scaled product $0→$10M at **Rocket Internet** · MSBA candidate at UC Davis.
+Built by **Priyanka Nayyar** — 3 years at **GSK Pharma** · Scaled product $0→$10M at **Rocket Internet** · MBA (Singapore Management University) + MSBA-STEM (University of California, Davis).
 
 I built LabSentinel because I saw the problem firsthand: data integrity is the **#1 FDA violation** (cited in 61% of warning letters), yet the audit workflow hasn't changed in decades. A human looks at a photo, reads an SOP, writes a finding, signs off. AI in pharma today focuses on drug discovery and manufacturing-line inspection — nobody is automating the lab-level image audit. This is that tool.
 
@@ -352,18 +293,9 @@ I built LabSentinel because I saw the problem firsthand: data integrity is the *
 
 ---
 
-## 📚 Documentation
-
-| Document | What it covers |
-|---|---|
-| [**SCORING_LOGIC.md**](SCORING_LOGIC.md) | Complete scoring formula, mismatch detection logic, phantom filter rules, worked examples, and a plain-English glossary of every technical term |
-| [**README.md**](README.md) | This file — architecture, features, setup, and roadmap |
-
----
-
 ## 🏷️ GitHub Topics
 
-If you're exploring this repo, here are the topics that describe it: `nvidia`, `nemotron`, `gtc2026`, `pharmaceutical`, `compliance`, `data-integrity`, `computer-vision`, `ai`, `streamlit`, `sop-auditing`
+If you're exploring this repo, here are the topics that describe it: `nvidia`, `nemotron`, `gtc2026`, `golden-ticket-contest`, `pharmaceutical`, `compliance`, `data-integrity`, `computer-vision`, `ai`, `streamlit`, `sop-auditing`
 
 > *These are also set as repository topics on GitHub for discoverability.*
 
