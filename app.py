@@ -1,5 +1,5 @@
 """
-LabSentinel - AI-Powered Lab Data Integrity Auditor
+LabSentinel v55 - AI-Powered Lab Data Integrity Auditor
 Uses NVIDIA Nemotron models to cross-reference lab imagery against SOPs
 and flag data integrity discrepancies in pharmaceutical R&D.
 """
@@ -12,7 +12,7 @@ import re
 import hashlib
 from io import BytesIO
 from datetime import datetime
-from openai import OpenAI
+from openai import OpenAI  # NVIDIA NIM API is OpenAI-compatible by design (per NVIDIA docs)
 from dotenv import load_dotenv
 from sample_sops import SAMPLE_SOPS
 
@@ -133,6 +133,133 @@ def extract_exif_metadata(uploaded_file):
 
 
 # ============================================================
+# HELPER: Generate PDF audit report
+# ============================================================
+# Exports the full audit results as a downloadable PDF for
+# regulatory documentation and record-keeping.
+
+def generate_pdf_report(audit_result, image_quality_score, exif_metadata, score, status):
+    """Generate a PDF audit report from the audit results."""
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        return None
+    
+    def safe_text(text):
+        """Strip non-latin-1 characters to prevent fpdf crashes."""
+        if not text:
+            return "N/A"
+        replacements = {
+            "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
+            "\u2013": "-", "\u2014": "-", "\u2026": "...", "\u00b7": "-",
+            "\u2022": "-", "\u00b1": "+/-", "\u00b0": " deg", "\u2265": ">=",
+            "\u2264": "<=", "\u00d7": "x",
+        }
+        for char, replacement in replacements.items():
+            text = text.replace(char, replacement)
+        return text.encode("latin-1", errors="replace").decode("latin-1")
+    
+    def write_text(pdf_obj, text, font_size=10, bold=False):
+        """Safely write text to PDF, truncating if needed."""
+        style = "B" if bold else ""
+        pdf_obj.set_font("Helvetica", style, font_size)
+        clean = safe_text(str(text))
+        # Truncate very long text to prevent overflow
+        if len(clean) > 500:
+            clean = clean[:497] + "..."
+        try:
+            pdf_obj.multi_cell(w=0, h=5, text=clean)
+        except Exception:
+            # Last resort: truncate further
+            try:
+                pdf_obj.multi_cell(w=0, h=5, text=clean[:200] + "...")
+            except Exception:
+                pdf_obj.cell(0, 5, "[Text could not be rendered]", ln=True)
+    
+    pdf = FPDF(orientation="P", unit="mm", format="A4")
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.set_left_margin(20)
+    pdf.set_right_margin(20)
+    pdf.add_page()
+    
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.cell(0, 12, "LabSentinel Audit Report", ln=True, align="C")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(100, 100, 100)
+    pdf.cell(0, 6, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}  |  Powered by NVIDIA Nemotron", ln=True, align="C")
+    pdf.ln(8)
+    
+    # Score
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Helvetica", "B", 16)
+    pdf.cell(0, 10, f"Score: {score}/100  |  Status: {status}", ln=True)
+    pdf.ln(4)
+    
+    # Score Breakdown
+    checklist = audit_result.get("sop_compliance_checklist", [])
+    n_c = sum(1 for i in checklist if i.get("status", "").upper() == "COMPLIANT")
+    n_nc = sum(1 for i in checklist if i.get("status", "").upper() == "NON-COMPLIANT")
+    n_ua = sum(1 for i in checklist if i.get("status", "").upper() == "UNABLE TO ASSESS")
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "Score Breakdown", ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.cell(0, 6, f"Compliant: {n_c}  |  Non-Compliant: {n_nc}  |  Unable to Assess: {n_ua}", ln=True)
+    pdf.ln(4)
+    
+    # Executive Summary
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "Executive Summary", ln=True)
+    write_text(pdf, audit_result.get("summary", "No summary available."))
+    pdf.ln(4)
+    
+    # Findings
+    findings = audit_result.get("findings", [])
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, f"Findings ({len(findings)})", ln=True)
+    if findings:
+        for f in findings:
+            write_text(pdf, f"[{f.get('id', 'F000')}] {f.get('severity', 'N/A')} - {f.get('category', 'N/A')}", font_size=10, bold=True)
+            write_text(pdf, f"Observed: {f.get('observation', 'N/A')}", font_size=9)
+            write_text(pdf, f"SOP Requires: {f.get('sop_requirement', 'N/A')}", font_size=9)
+            write_text(pdf, f"Discrepancy: {f.get('discrepancy', 'N/A')}", font_size=9)
+            write_text(pdf, f"Recommendation: {f.get('recommendation', 'N/A')}", font_size=9)
+            pdf.ln(3)
+    else:
+        write_text(pdf, "No findings - all observations align with SOP requirements.")
+    pdf.ln(4)
+    
+    # SOP Compliance Checklist
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "SOP Compliance Checklist", ln=True)
+    for item in checklist:
+        status_mark = {"COMPLIANT": "[PASS]", "NON-COMPLIANT": "[FAIL]", "UNABLE TO ASSESS": "[N/A]"}.get(item.get("status", ""), "[?]")
+        write_text(pdf, f"{status_mark} {item.get('criterion', 'N/A')} - {item.get('notes', '')}", font_size=9)
+    pdf.ln(4)
+    
+    # Risk Assessment
+    risk = audit_result.get("risk_assessment", "")
+    if risk:
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, "Risk Assessment", ln=True)
+        write_text(pdf, risk)
+    pdf.ln(4)
+    
+    # Image Forensics
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, "Image Forensics", ln=True)
+    pdf.set_font("Helvetica", "", 10)
+    if image_quality_score is not None:
+        pdf.cell(0, 6, f"Image Quality: {image_quality_score}/10", ln=True)
+    if exif_metadata.get("image_width"):
+        pdf.cell(0, 6, f"Resolution: {exif_metadata['image_width']} x {exif_metadata['image_height']} px", ln=True)
+    if exif_metadata.get("capture_date"):
+        pdf.cell(0, 6, f"Capture Date: {safe_text(str(exif_metadata['capture_date']))}", ln=True)
+    
+    return bytes(pdf.output())
+
+
+# ============================================================
 # CORE FUNCTION 1: Analyze the lab image using Nemotron Vision
 # ============================================================
 # This sends the lab image to NVIDIA's vision model and asks it
@@ -147,8 +274,6 @@ def analyze_lab_image(image_base64, image_type="image/jpeg"):
     vision_models = [
         "nvidia/nemotron-nano-12b-v2-vl",
         "nvidia/vlm-1b-instruct",
-        "google/gemma-3-27b-it",
-        "meta/llama-3.2-11b-vision-instruct",
     ]
     
     prompt_text = """You are an expert pharmaceutical laboratory analyst with 20 years 
@@ -156,10 +281,10 @@ of experience in quality control and GMP compliance. Analyze this laboratory ima
 
 FIRST, identify the experiment type. State ONE of these on the very first line:
 EXPERIMENT_TYPE: MTT_CELL_VIABILITY (if you see a multi-well plate with purple/blue colored wells)
-EXPERIMENT_TYPE: GEL_ELECTROPHORESIS (if you see a gel with bands/lanes under UV or visible light)
-EXPERIMENT_TYPE: HPLC_CHROMATOGRAPHY (if you see a chromatogram chart with peaks)
-EXPERIMENT_TYPE: COLONY_COUNTING (if you see petri dishes with bacterial colonies)
-EXPERIMENT_TYPE: OTHER (if none of the above)
+EXPERIMENT_TYPE: GEL_ELECTROPHORESIS (if you see a gel slab with bands/lanes, OR a rectangular translucent block under UV/blue light with fluorescent bands, OR an agarose/polyacrylamide gel image)
+EXPERIMENT_TYPE: HPLC_CHROMATOGRAPHY (if you see a chromatogram chart with peaks on an x-y axis)
+EXPERIMENT_TYPE: COLONY_COUNTING (if you see petri dishes with bacterial/fungal colonies on agar)
+EXPERIMENT_TYPE: OTHER (if none of the above — use this ONLY if the image clearly does not match any category)
 
 SECOND, rate the image quality for audit purposes on the next line:
 IMAGE_QUALITY: <1-10> (1=completely unusable, 5=marginal, 10=perfect lab documentation quality)
@@ -233,10 +358,36 @@ Your role is to compare laboratory visual evidence against Standard Operating Pr
 to detect data integrity issues, procedural deviations, and potential reproducibility failures.
 
 You must be thorough, precise, and unbiased. You flag issues that human reviewers might miss 
-due to confirmation bias or time pressure. Your analysis helps prevent the $28 billion/year 
-reproducibility crisis in preclinical research.
+due to confirmation bias or time pressure.
 
-IMPORTANT: Always respond with the structured JSON format requested. Be specific about 
+STEP 1 - EXPERIMENT TYPE CHECK:
+First, verify the image shows the same type of experiment as the SOP describes.
+- A well plate image should only be audited against a cell viability/MTT SOP
+- A chromatogram should only be audited against an HPLC SOP
+- A gel image should only be audited against a gel electrophoresis SOP
+- A petri dish image should only be audited against a colony counting SOP
+If the experiment types DO NOT match (e.g., well plate image vs HPLC SOP), mark ALL checklist 
+items as NON-COMPLIANT and add one CRITICAL finding explaining the type mismatch. Then stop.
+
+STEP 2 - IF EXPERIMENT TYPES MATCH, perform the audit with these severity guidelines:
+- CRITICAL: Only for issues that directly endanger patient safety or completely invalidate results 
+  (e.g., confirmed contamination, data fabrication evidence, wrong experiment type)
+- MAJOR: Issues that compromise data reliability but don't invalidate everything 
+  (e.g., missing documentation, procedural shortcuts)
+- MINOR: Issues that reduce confidence but results may still be usable 
+  (e.g., image quality limitations, minor formatting gaps)
+- OBSERVATION: Cosmetic or best-practice suggestions
+
+IMPORTANT CALIBRATION:
+- An image being a photograph of a printout is at most a MINOR documentation issue, not MAJOR
+- If you cannot assess a criterion from the image alone, mark it UNABLE TO ASSESS — do NOT 
+  mark it NON-COMPLIANT just because the image doesn't show that specific data
+- Labeled peaks in a chromatogram are expected compounds, not "unknown peaks" — only flag 
+  truly unidentified or unlabeled peaks
+- Be fair: a real-world auditor would not fail an experiment just because a photo doesn't 
+  show every instrument parameter
+
+Always respond with the structured JSON format requested. Be specific about 
 which SOP criteria each finding relates to."""
                 },
                 {
@@ -251,7 +402,26 @@ against the Standard Operating Procedure.
 {sop_text}
 
 ## YOUR TASK:
-Generate a comprehensive audit report in the following JSON format:
+Generate a comprehensive audit report in the following JSON format.
+
+CRITICAL INSTRUCTION FOR CHECKLIST:
+The SOP above contains numbered "EXPECTED OBSERVATIONS" and bulleted "REJECTION CRITERIA".
+You MUST create exactly ONE checklist item for EACH expected observation and EACH rejection criterion listed in the SOP.
+Do NOT invent new checklist items. Do NOT skip any items from the SOP.
+For each item, assess ONLY based on what is visible in the image analysis:
+- COMPLIANT: Image evidence clearly satisfies this criterion
+- NON-COMPLIANT: Image evidence clearly violates this criterion  
+- UNABLE TO ASSESS: Image does not provide enough information to evaluate this criterion
+When in doubt, use UNABLE TO ASSESS rather than NON-COMPLIANT.
+
+CRITICAL INSTRUCTION FOR FINDINGS:
+Findings should ONLY be created for genuine problems visible in the image — things that are 
+clearly wrong, contaminated, missing, or deviant from the SOP.
+Do NOT create findings for items marked UNABLE TO ASSESS. If you cannot verify something 
+from the image, that is a checklist limitation, NOT a finding.
+A photograph of a printout is NOT a finding — it is a documentation format.
+Limit findings to genuine, visible discrepancies. Most correct experiment images should have 
+0-3 findings at most.
 
 {{
     "data_integrity_score": <integer 0-100, where 100 = perfect compliance>,
@@ -271,9 +441,9 @@ Generate a comprehensive audit report in the following JSON format:
     ],
     "sop_compliance_checklist": [
         {{
-            "criterion": "<SOP requirement>",
+            "criterion": "<exact criterion from SOP — one per EXPECTED OBSERVATION and REJECTION CRITERION>",
             "status": "<COMPLIANT | NON-COMPLIANT | UNABLE TO ASSESS>",
-            "notes": "<brief explanation>"
+            "notes": "<brief explanation of what you see or why you can't assess>"
         }}
     ],
     "risk_assessment": "<brief paragraph on overall risk to data integrity>",
@@ -281,7 +451,6 @@ Generate a comprehensive audit report in the following JSON format:
 }}
 
 Be thorough but fair. Only flag genuine concerns, not speculative issues.
-If the image quality prevents assessment of certain criteria, mark them as UNABLE TO ASSESS.
 Respond ONLY with the JSON object, no additional text before or after it."""
                 }
             ],
@@ -344,6 +513,49 @@ def parse_audit_response(response_text):
     
     checklist = result.get("sop_compliance_checklist", [])
     findings = result.get("findings", [])
+    
+    # ---- FINDINGS FILTER ----
+    # The AI often generates findings for things it CANNOT see in the image
+    # (e.g., "cannot verify temperature", "incubation time not visible").
+    # These are not real findings — they're just restating UNABLE TO ASSESS items.
+    # We filter them out deterministically so they don't inflate the penalty.
+    
+    # Keywords that indicate a finding is about missing info, not a real problem
+    not_real_finding_phrases = [
+        "cannot be verified", "cannot be assessed", "cannot be determined",
+        "cannot be confirmed", "cannot be evaluated", "cannot be measured",
+        "cannot confirm", "cannot assess", "cannot determine", "cannot evaluate",
+        "not visible", "not provided", "not shown", "not available",
+        "not displayed", "not indicated", "not present in the image",
+        "does not show", "does not display", "does not indicate",
+        "does not provide", "lacks visible", "lacks context",
+        "image does not", "image lacks", "from the image alone",
+        "from a static image", "from the static image",
+        "from the captured image", "from the current image",
+        "printed on paper", "scanned", "photographed",
+    ]
+    
+    filtered_findings = []
+    for f in findings:
+        # Combine all text fields to check for phantom finding phrases
+        finding_text = " ".join([
+            str(f.get("observation", "")),
+            str(f.get("discrepancy", "")),
+            str(f.get("impact", "")),
+        ]).lower()
+        
+        # Keep the finding only if it describes a REAL visible problem
+        is_phantom = any(phrase in finding_text for phrase in not_real_finding_phrases)
+        
+        # Always keep CRITICAL and MAJOR findings — even if phrased poorly, they matter
+        if f.get("severity", "").upper() in ["CRITICAL", "MAJOR"]:
+            filtered_findings.append(f)
+        elif not is_phantom:
+            filtered_findings.append(f)
+    
+    # Update results with filtered findings
+    result["findings"] = filtered_findings
+    findings = filtered_findings
     
     if checklist:
         compliant = sum(1 for item in checklist if item.get("status", "").upper() == "COMPLIANT")
@@ -456,10 +668,18 @@ st.markdown("""
         background: #0d0d14;
         border-right: 1px solid rgba(118, 185, 0, 0.1);
     }
+    /* Fix Streamlit icon text leak on sidebar toggle */
+    button[data-testid="stBaseButton-headerNoPadding"] {
+        font-size: 0 !important;
+    }
+    /* Fix Streamlit expander icon text leak */
+    details[data-testid="stExpander"] summary span[class*="emotion-cache"] {
+        overflow: hidden;
+    }
     .stat-row {
         display: flex;
         gap: 10px;
-        margin-bottom: 8px;
+        margin-bottom: 10px;
         align-items: baseline;
     }
     .stat-number {
@@ -467,11 +687,27 @@ st.markdown("""
         color: #76b900;
         font-weight: 700;
         font-size: 0.95rem;
-        min-width: 48px;
+        min-width: 64px;
+        flex-shrink: 0;
     }
     .stat-text {
         color: #8a8a96;
         font-size: 0.92rem;
+    }
+    .stat-source {
+        display: block;
+        margin-top: 2px;
+        font-size: 0.72rem;
+        color: #5a5a6a;
+        font-style: italic;
+    }
+    .stat-source a {
+        color: #5a8a30;
+        text-decoration: none;
+    }
+    .stat-source a:hover {
+        text-decoration: underline;
+        color: #76b900;
     }
     
     /* Form elements - dark */
@@ -534,6 +770,23 @@ st.markdown("""
         background: rgba(118, 185, 0, 0.2) !important;
     }
     
+    /* Download button — NVIDIA green with bold white text */
+    .stDownloadButton > button {
+        background: linear-gradient(135deg, #76b900, #5a8f00) !important;
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 10px !important;
+        padding: 0.75rem 1.5rem !important;
+        letter-spacing: 0.3px;
+        transition: all 0.2s ease;
+    }
+    .stDownloadButton > button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 24px rgba(118, 185, 0, 0.25) !important;
+        color: #ffffff !important;
+    }
+    
     /* Expander fix */
     .stExpander { margin-top: 0.5rem !important; margin-bottom: 1rem !important; }
     details[data-testid="stExpander"] summary {
@@ -578,10 +831,10 @@ st.html("""
     <div style="display:flex; align-items:center; gap:1.5rem; margin-bottom:12px;">
         <div style="font-size:72px; font-weight:800; color:#ffffff; letter-spacing:-2px; line-height:1;">Lab<span style="color:#76b900; font-size:72px; font-weight:800;">Sentinel</span></div>
     </div>
-    <div style="font-size:22px; color:#b0b0c0; font-weight:500; margin-bottom:16px;">Catches data integrity issues that human auditors miss.</div>
+    <div style="font-size:22px; color:#b0b0c0; font-weight:500; margin-bottom:16px;">AI that audits lab images against SOPs to flag compliance gaps in seconds.</div>
     <div style="display:flex; gap:2rem; flex-wrap:wrap; align-items:center;">
-        <span style="font-size:13px; color:#606070; font-family:'JetBrains Mono',monospace;">⚡ <span style="color:#76b900;">Nemotron Nano VL</span> — Vision</span>
-        <span style="font-size:13px; color:#606070; font-family:'JetBrains Mono',monospace;">🧠 <span style="color:#76b900;">Nemotron 3 Nano</span> — Reasoning</span>
+        <span style="font-size:13px; color:#606070; font-family:'JetBrains Mono',monospace;">⚡ <span style="color:#76b900;">Nemotron Nano VL</span> — <span style="color:#d0d0dc;">Vision</span></span>
+        <span style="font-size:13px; color:#606070; font-family:'JetBrains Mono',monospace;">🧠 <span style="color:#76b900;">Nemotron 3 Nano</span> — <span style="color:#d0d0dc;">Reasoning</span></span>
         <span style="font-size:13px; color:#606070; font-family:'JetBrains Mono',monospace;">☁️ <span style="color:#76b900;">NVIDIA NIM API</span></span>
     </div>
 </div>
@@ -598,16 +851,25 @@ with st.sidebar:
     st.html("""
     <div style="background:rgba(118,185,0,0.06); border:1px solid rgba(118,185,0,0.2); border-radius:12px; padding:1rem 1.2rem; margin-bottom:1rem; font-family:'DM Sans',sans-serif;">
         <div style="font-size:14px; font-weight:700; color:#76b900; margin-bottom:6px;">🏆 NVIDIA GTC 2026 Golden Ticket</div>
-        <div style="font-size:13px; color:#9090a0; line-height:1.5;">Built by a product & marketing leader with experience at <span style="color:#d0d0dc; font-weight:600;">GSK, Agoda & Rocket Internet</span> — who saw pharma's data integrity crisis up close.</div>
+        <div style="font-size:13px; color:#9090a0; line-height:1.5;">3 years at <span style="color:#d0d0dc; font-weight:600;">GSK Pharma</span> · Scaled product $0→$10M at <span style="color:#d0d0dc; font-weight:600;">Rocket Internet</span> · Built this to solve the <span style="color:#d0d0dc; font-weight:600;">#1 FDA violation:</span> <span style="color:#d0d0dc; font-weight:600;">data integrity</span>.</div>
     </div>
     """)
     
     st.html('<div style="font-family:JetBrains Mono,monospace; font-size:1.1rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:2px; margin-bottom:8px;">🧪 Why This Matters</div>')
     st.markdown("""
-    <div class="stat-row"><span class="stat-number">$28B</span><span class="stat-text">wasted yearly on irreproducible research</span></div>
-    <div class="stat-row"><span class="stat-number">50%+</span><span class="stat-text">preclinical studies can't be replicated</span></div>
-    <div class="stat-row"><span class="stat-number">+50%</span><span class="stat-text">jump in FDA warning letters (2025)</span></div>
-    <div class="stat-row"><span class="stat-number">#1</span><span class="stat-text">compliance issue: data integrity</span></div>
+    <div class="stat-row"><span class="stat-number">$50B</span><span class="stat-text">global pharma compliance spend · lab image audits still manual<span class="stat-source"><a href="https://gmppros.com/pharma-regulatory-compliance/" target="_blank">McKinsey Healthcare Analytics 2024 via GMP Pros</a></span></span></div>
+    <div class="stat-row"><span class="stat-number">+50%</span><span class="stat-text">surge in CDER warning letters FY2025<span class="stat-source"><a href="https://insider.thefdagroup.com/p/cder-warning-letters-jump-50-percent" target="_blank">Jill Furman, CDER Dir. of Compliance, Dec 2025 via RAPS</a></span></span></div>
+    <div class="stat-row"><span class="stat-number">61%</span><span class="stat-text">of FDA warning letters cite data integrity — #1 violation<span class="stat-source"><a href="https://www.europeanpharmaceuticalreview.com/news/219951/fda-warning-letters-highlight-data-integrity-issues/" target="_blank">European Pharmaceutical Review, FDA data</a></span></span></div>
+    <div class="stat-row"><span class="stat-number">$12M+</span><span class="stat-text">avg cost per compliance failure · up to $1B under consent decree<span class="stat-source"><a href="https://gmppros.com/pharma-regulatory-compliance/" target="_blank">GMP Pros 2025</a> · consent decree public records</span></span></div>
+    """, unsafe_allow_html=True)
+
+    st.divider()
+
+    st.html('<div style="font-family:JetBrains Mono,monospace; font-size:1.1rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:2px; margin-bottom:8px;">⚡ What LabSentinel Saves</div>')
+    st.markdown("""
+    <div class="stat-row"><span class="stat-number">10–40d</span><span class="stat-text">batch visual audit → seconds with AI-assisted review<span class="stat-source"><a href="https://www.biopharminternational.com/view/review-exception-connecting-dots-faster-batch-release" target="_blank">BioPharm International, Dec 2025</a></span></span></div>
+    <div class="stat-row"><span class="stat-number">70%</span><span class="stat-text">of QA effort spent reviewing docs, not investigating<span class="stat-source"><a href="https://www.ey.com/en_us/insights/life-sciences/electronic-batch-records-improve-pharma-manufacturing" target="_blank">EY Life Sciences, 2025</a></span></span></div>
+    <div class="stat-row"><span class="stat-number">47%</span><span class="stat-text">right-first-time rate — LabSentinel catches errors in real time<span class="stat-source"><a href="https://www.biopharminternational.com/view/review-exception-connecting-dots-faster-batch-release" target="_blank">BioPharm International, Dec 2025</a></span></span></div>
     """, unsafe_allow_html=True)
     
     st.divider()
@@ -621,13 +883,20 @@ with st.sidebar:
     
     st.divider()
     
-    st.html('<div style="font-family:JetBrains Mono,monospace; font-size:1.1rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:2px; margin-bottom:8px;">🚀 Roadmap</div>')
+    st.html('<div style="font-family:JetBrains Mono,monospace; font-size:1.1rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:2px; margin-bottom:10px;">🚀 Roadmap</div>')
     st.markdown("""
-    <div class="stat-row"><span class="stat-text">🔄 Multi-image batch auditing</span></div>
-    <div class="stat-row"><span class="stat-text">📊 Raw instrument data analysis</span></div>
-    <div class="stat-row"><span class="stat-text">🏥 LIMS & e-lab notebook integration</span></div>
-    <div class="stat-row"><span class="stat-text">📋 Auto-generated regulatory reports</span></div>
-    <div class="stat-row"><span class="stat-text">⚡ <span style="color:#76b900; font-weight:600;">Nemotron Ultra on NVIDIA DGX</span> for production deployment</span></div>
+    <div style="margin-bottom:14px;">
+        <div style="font-size:1.05rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:1px; margin-bottom:5px;">Phase 1 · Scale</div>
+        <div style="color:#d0d0dc; font-size:0.95rem; line-height:1.5;">🔄 Multi-image batch auditing<br>📋 Auto-generated 21 CFR Part 11 compliance reports</div>
+    </div>
+    <div style="border-top:1px solid rgba(118,185,0,0.15); margin-bottom:14px; padding-top:12px;">
+        <div style="font-size:1.05rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:1px; margin-bottom:5px;">Phase 2 · Integrate</div>
+        <div style="color:#d0d0dc; font-size:0.95rem; line-height:1.5;">🏥 LIMS & e-lab notebook connectors<br>🌡️ Live sensor feeds (temp, CO₂, humidity) via <span style="color:#76b900; font-weight:600;">NVIDIA Jetson</span> edge AI</div>
+    </div>
+    <div style="border-top:1px solid rgba(118,185,0,0.15); margin-bottom:8px; padding-top:12px;">
+        <div style="font-size:1.05rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:1px; margin-bottom:5px;">Phase 3 · Enterprise</div>
+        <div style="color:#d0d0dc; font-size:0.95rem; line-height:1.5;">⚡ <span style="color:#76b900; font-weight:600;">Nemotron Ultra on NVIDIA DGX</span> for multi-facility, real-time deployment</div>
+    </div>
     """, unsafe_allow_html=True)
 
 # ---- MAIN CONTENT: Vertical flow (1 → 2 → 3) ----
@@ -709,14 +978,17 @@ if uploaded_image is None:
 # ---- RUN THE AUDIT ----
 if audit_button and uploaded_image is not None and sop_text:
     
-    # Determine image type
-    image_type = f"image/{uploaded_image.type.split('/')[-1]}" if uploaded_image.type else "image/jpeg"
+    # Determine image type safely
+    if uploaded_image.type and "/" in uploaded_image.type:
+        image_type = uploaded_image.type
+    else:
+        image_type = "image/jpeg"
     
     # Convert image to base64
     image_b64 = image_to_base64(uploaded_image)
     
     # Create a unique hash for this image to use as cache key
-    image_hash = hashlib.md5(image_b64.encode()[:1000]).hexdigest()
+    image_hash = hashlib.sha256(image_b64.encode()).hexdigest()
     
     # STEP 1: Analyze the image (CACHED TO DISK - same image = same analysis forever)
     cache_key = f"vision_{image_hash}"
@@ -782,7 +1054,7 @@ if audit_button and uploaded_image is not None and sop_text:
     # Keywords that strongly indicate each experiment type
     type_keywords = {
         "MTT_CELL_VIABILITY": ["mtt", "96-well", "microplate", "well plate", "formazan", "purple well", "cell viability"],
-        "GEL_ELECTROPHORESIS": ["gel electrophoresis", "agarose", "gel band", "dna gel", "gel lane", "electrophoresis"],
+        "GEL_ELECTROPHORESIS": ["gel electrophoresis", "agarose", "gel band", "dna gel", "gel lane", "electrophoresis", "uv light", "uv illuminat", "fluorescent band", "ethidium bromide", "translucent block", "transparent block", "dna ladder", "gel slab"],
         "HPLC_CHROMATOGRAPHY": ["hplc", "chromatogram", "chromatography", "retention time", "peak area"],
         "COLONY_COUNTING": ["colony count", "cfu", "petri dish", "bacterial colony", "agar plate"],
     }
@@ -822,17 +1094,10 @@ if audit_button and uploaded_image is not None and sop_text:
     if expected_type and best_detected_type != "OTHER" and expected_type not in best_detected_type:
         is_mismatch = True
     
-    if is_mismatch:
-        st.html("""
-        <div style="padding:2rem; border-radius:16px; text-align:center; margin:1rem 0; background:linear-gradient(135deg, rgba(220,53,69,0.12), rgba(220,53,69,0.03)); border:1px solid rgba(220,53,69,0.4);">
-            <div style="font-family:'JetBrains Mono',monospace; font-size:72px; font-weight:700; color:#ff6b7a; margin:0;">🚫 SOP MISMATCH</div>
-            <div style="font-weight:600; font-size:1.2rem; text-transform:uppercase; letter-spacing:3px; color:#ff6b7a; margin-top:0.3rem;">Image does not match selected SOP</div>
-        </div>
-        """)
-        st.error("**The uploaded image does not appear to match the selected Standard Operating Procedure.** "
-                 "For example, you may have uploaded a gel electrophoresis image but selected the MTT Cell Viability SOP. "
-                 "Please select the correct SOP for this image type and try again.")
-        st.stop()
+    # NOTE: We no longer block the audit on mismatch. The audit always runs,
+    # and the score-based warning (≤20) handles both mismatch AND genuine failures.
+    # Hard-blocking was too aggressive — a low score on a "mismatched" pair could
+    # still be a valid audit of a genuinely failed experiment.
     
     # STEP 2: Compare with SOP (CACHED TO DISK - same image + same SOP = same result forever)
     sop_hash = hashlib.md5(sop_text.encode()).hexdigest()
@@ -849,6 +1114,31 @@ if audit_button and uploaded_image is not None and sop_text:
     
     # Parse the response
     audit_result = parse_audit_response(audit_response)
+    
+    # ---- MISMATCH SCORE OVERRIDE ----
+    # If code-level mismatch detection found a wrong pairing (e.g., well plate vs HPLC SOP),
+    # override the score regardless of what Nemotron returned. The model often marks mismatched
+    # criteria as UNABLE TO ASSESS instead of NON-COMPLIANT, inflating the score.
+    # Legitimate "unable to assess" (e.g., can't read temperature from photo) only applies
+    # when the experiment type MATCHES the SOP — sensor gaps, not experiment mismatches.
+    if is_mismatch:
+        audit_result["data_integrity_score"] = min(audit_result.get("data_integrity_score", 0), 15)
+        audit_result["overall_status"] = "FAIL"
+        # Add a mismatch finding if one doesn't already exist
+        existing_findings = audit_result.get("findings", [])
+        has_mismatch_finding = any("mismatch" in f.get("category", "").lower() or "mismatch" in f.get("discrepancy", "").lower() for f in existing_findings)
+        if not has_mismatch_finding:
+            existing_findings.insert(0, {
+                "id": "F000",
+                "severity": "CRITICAL",
+                "category": "Experiment Type Mismatch",
+                "observation": f"Vision model detected: {best_detected_type}",
+                "sop_requirement": f"SOP expects: {expected_type}",
+                "discrepancy": "The uploaded image does not match the selected SOP protocol. This is a fundamental pairing error, not a compliance failure.",
+                "impact": "Audit results are not meaningful when image and SOP are from different experiment types.",
+                "recommendation": "Select the correct SOP for this image, or upload the correct image for this SOP."
+            })
+            audit_result["findings"] = existing_findings
     
     # ---- DISPLAY RESULTS ----
     
@@ -894,6 +1184,58 @@ if audit_button and uploaded_image is not None and sop_text:
         <div style="font-weight:600; font-size:1.2rem; text-transform:uppercase; letter-spacing:3px; color:{text_color}; margin-top:0.3rem;">Status: {status}</div>
     </div>
     """)
+    
+    # ---- SCORE BREAKDOWN VISUAL ----
+    checklist_display = audit_result.get("sop_compliance_checklist", [])
+    findings_display = audit_result.get("findings", [])
+    n_compliant = sum(1 for item in checklist_display if item.get("status", "").upper() == "COMPLIANT")
+    n_non_compliant = sum(1 for item in checklist_display if item.get("status", "").upper() == "NON-COMPLIANT")
+    n_unable = sum(1 for item in checklist_display if item.get("status", "").upper() == "UNABLE TO ASSESS")
+    n_total = n_compliant + n_non_compliant + n_unable
+    
+    # Calculate penalty for display
+    severity_penalties_display = {"CRITICAL": 15, "MAJOR": 10, "MINOR": 5, "OBSERVATION": 2}
+    total_penalty = sum(severity_penalties_display.get(f.get("severity", "").upper(), 0) for f in findings_display)
+    
+    # Bar widths (percentage)
+    pct_compliant = round(n_compliant / n_total * 100) if n_total > 0 else 0
+    pct_non_compliant = round(n_non_compliant / n_total * 100) if n_total > 0 else 0
+    pct_unable = round(n_unable / n_total * 100) if n_total > 0 else 0
+    
+    raw_score_display = round(((n_compliant * 1.0) + (n_unable * 0.25)) / n_total * 100) if n_total > 0 else 0
+    
+    st.html(f"""
+    <div style="padding:1.2rem 1.5rem; border-radius:12px; margin:0.5rem 0 1rem; background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06);">
+        <div style="font-family:'JetBrains Mono',monospace; font-size:0.8rem; font-weight:700; color:#76b900; text-transform:uppercase; letter-spacing:1.5px; margin-bottom:10px;">📊 Score Breakdown</div>
+        <div style="display:flex; height:24px; border-radius:6px; overflow:hidden; margin-bottom:10px; background:#1a1a24;">
+            <div style="width:{pct_compliant}%; background:#4cdf78;" title="Compliant"></div>
+            <div style="width:{pct_non_compliant}%; background:#ff4d5e;" title="Non-Compliant"></div>
+            <div style="width:{pct_unable}%; background:#555;" title="Unable to Assess"></div>
+        </div>
+        <div style="display:flex; gap:1.5rem; flex-wrap:wrap; font-size:0.85rem; margin-bottom:8px;">
+            <span style="color:#4cdf78;">✅ Compliant: {n_compliant}/{n_total}</span>
+            <span style="color:#ff4d5e;">❌ Non-Compliant: {n_non_compliant}/{n_total}</span>
+            <span style="color:#888;">❓ Unable to Assess: {n_unable}/{n_total}</span>
+        </div>
+        <div style="font-size:0.82rem; color:#707080; font-family:'JetBrains Mono',monospace; line-height:1.8;">
+            Checklist Score: {raw_score_display}/100 &nbsp;·&nbsp; Finding Penalties: −{total_penalty} pts &nbsp;·&nbsp; <span style="color:{text_color}; font-weight:600;">Final: {score}/100</span>
+        </div>
+    </div>
+    """)
+    
+    # Possible SOP mismatch OR serious compliance failure warning
+    if score <= 40:
+        # Check if the vision model detected a different experiment type than the SOP expects
+        mismatch_note = ""
+        if is_mismatch:
+            mismatch_note = ' <strong style="color:#ff6b7a;">The AI detected a different experiment type than the selected SOP — this is likely an incorrect pairing.</strong>'
+        
+        st.html(f"""
+        <div style="padding:1.2rem; border-radius:12px; margin:0.5rem 0 1rem; background:rgba(255,176,32,0.08); border:1px solid rgba(255,176,32,0.3);">
+            <div style="font-family:'JetBrains Mono',monospace; font-size:0.85rem; font-weight:700; color:#ffb020; text-transform:uppercase; letter-spacing:1.5px;">⚠️ Unusually Low Score</div>
+            <div style="color:#b0b0c0; font-size:0.95rem; margin-top:6px;">A score this low typically indicates one of two things: <strong style="color:#ffffff;">(1)</strong> the uploaded image does not match the selected SOP — please verify you chose the correct protocol, or <strong style="color:#ffffff;">(2)</strong> a serious compliance failure was detected in the experiment. Review the findings below carefully.{mismatch_note}</div>
+        </div>
+        """)
     
     # Summary
     summary = audit_result.get("summary", "No summary available.")
@@ -1001,12 +1343,21 @@ if audit_button and uploaded_image is not None and sop_text:
     
     st.divider()
     
-    # Raw AI Analysis (collapsible - for transparency)
-    with st.expander("🔍 View Raw Image Analysis (Nemotron Vision Output)"):
-        st.text(image_analysis)
+    # ---- PDF EXPORT ----
+    st.markdown('<div class="section-title">📄 Export Report</div>', unsafe_allow_html=True)
+    pdf_bytes = generate_pdf_report(audit_result, image_quality_score, exif_metadata, score, status)
+    if pdf_bytes:
+        st.download_button(
+            label="📥 Download Audit Report (PDF)",
+            data=pdf_bytes,
+            file_name=f"LabSentinel_Audit_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf",
+            mime="application/pdf",
+            use_container_width=True
+        )
+    else:
+        st.info("PDF export requires the `fpdf2` package. Install with: `pip install fpdf2`")
     
-    with st.expander("🔍 View Raw Audit Response (Nemotron Reasoning Output)"):
-        st.text(audit_response)
+
 
 # ---- FOOTER ----
 st.html("""

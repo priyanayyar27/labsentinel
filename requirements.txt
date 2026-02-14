@@ -3,3 +3,4 @@ openai
 Pillow
 python-dotenv
 requests
+fpdf2
