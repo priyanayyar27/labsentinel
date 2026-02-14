@@ -28,11 +28,14 @@ except ImportError:
 # SETUP: Load API key and configure NVIDIA API client
 # ============================================================
 
-# Load the .env file (which contains your NVIDIA_API_KEY)
+# Load the .env file (for local development)
 load_dotenv()
 
-# Get the API key from the .env file
-NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+# Get the API key — works on both local (.env) and Streamlit Cloud (st.secrets)
+try:
+    NVIDIA_API_KEY = st.secrets["NVIDIA_API_KEY"]
+except (KeyError, FileNotFoundError):
+    NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
 
 # Create the API client that talks to NVIDIA's servers
 client = OpenAI(
