@@ -16,12 +16,6 @@
 
 > 🏆 **Built for the [NVIDIA GTC 2026 Golden Ticket Developer Contest](https://developer.nvidia.com/gtc-golden-ticket-contest)**
 
-<div align="center">
-
-[![CLICK HERE FOR LIVE DEMO](https://img.shields.io/badge/🚀_CLICK_HERE_FOR_LIVE_DEMO-76b900?style=for-the-badge&logoColor=white)](https://labsentinel.streamlit.app/)
-
-</div>
-
 ---
 
 ## 💊 The Problem
